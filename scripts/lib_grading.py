@@ -403,7 +403,7 @@ def _normalize_judge_response(parsed: Dict[str, Any]) -> Dict[str, Any]:
             # Handle nested structure: {"criterion": {"score": 0.9, "weight": 0.3}}
             for key, value in scores_data.items():
                 if isinstance(value, dict) and "score" in value:
-                    result["scores"][key] = value["score"]
+                    result["scores"][key] = float(value["score"]) if isinstance(value["score"], (int, float, str)) else value["score"]
                 elif isinstance(value, (int, float)):
                     result["scores"][key] = value
     elif "criteria_scores" in parsed:
@@ -418,7 +418,7 @@ def _normalize_judge_response(parsed: Dict[str, Any]) -> Dict[str, Any]:
     
     # Extract total score
     if "total" in parsed and parsed["total"] is not None:
-        result["total"] = float(parsed["total"])
+        result["total"] = float(parsed["total"]) if isinstance(parsed["total"], (int, float)) else None
     elif "score" in parsed and isinstance(parsed["score"], (int, float)):
         result["total"] = float(parsed["score"])
     elif result["scores"]:
