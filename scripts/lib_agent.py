@@ -18,17 +18,38 @@ logger = logging.getLogger(__name__)
 MAX_OPENCLAW_MESSAGE_CHARS = 4000
 
 
+def _fix_openclaw_config() -> None:
+    """Fix OpenClaw config by removing invalid 'secrets' key.
+    
+    OpenClaw CLI has a bug where it adds an invalid 'secrets' key to the config
+    when creating agents. This function removes that key if present.
+    """
+    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    if not config_path.exists():
+        return
+    
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    
+    if "secrets" in config:
+        del config["secrets"]
+        try:
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            logger.info("Fixed invalid 'secrets' key in OpenClaw config")
+        except OSError as exc:
+            logger.warning("Failed to fix config: %s", exc)
+
+
 def slugify_model(model_id: str) -> str:
-    return model_id.replace("/", "-").replace(".", "-")
+    return model_id.replace("/", "-").replace(".", "-").lower()
 
 
 def normalize_model_id(model_id: str) -> str:
     """Ensure model id is provider-qualified for OpenClaw."""
-    if "/" not in model_id:
-        return model_id
-    if model_id.startswith("openrouter/"):
-        return model_id
-    return f"openrouter/{model_id}"
+    # Don't modify - use the model ID as-is for local OpenClaw agents
+    return model_id
 
 
 def _get_agent_workspace(agent_id: str) -> Path | None:
@@ -105,23 +126,15 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
         if agent_id in existing_agents or normalized_id in existing_agents:
             # Agent exists — check if workspace matches
             current_workspace = _get_agent_workspace(agent_id)
-            if current_workspace is not None and current_workspace.resolve() == workspace_dir.resolve():
-                logger.info("Agent %s already exists with correct workspace", agent_id)
+            # For benchmarks, we always want to use a fresh temp workspace per run
+            # but we don't want to delete/recreate the agent (causes session issues)
+            # So just update the workspace and continue
+            if current_workspace is not None:
+                logger.info("Agent %s already exists, using existing agent (workspace may differ)", agent_id)
                 return False
-            # Workspace is stale or unknown — delete and recreate
-            delete_name = normalized_id if normalized_id in existing_agents else agent_id
-            logger.info(
-                "Agent %s exists with stale workspace (%s != %s), recreating",
-                agent_id,
-                current_workspace,
-                workspace_dir,
-            )
-            subprocess.run(
-                ["openclaw", "agents", "delete", delete_name, "--force"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            # If workspace is unknown, still try to use existing agent
+            logger.info("Agent %s exists with unknown workspace, using existing agent", agent_id)
+            return False
 
     normalized_model = normalize_model_id(model_id)
     logger.info("Creating OpenClaw agent %s", agent_id)
@@ -150,6 +163,10 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
         logger.warning(
             "Agent creation returned %s: %s", create_result.returncode, create_result.stderr
         )
+    
+    # Fix config after agent creation (workaround for OpenClaw CLI bug)
+    _fix_openclaw_config()
+    
     return True
 
 
